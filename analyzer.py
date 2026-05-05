@@ -30,6 +30,8 @@ COMPETITIONS = {
     "SA":  "Serie A",
     "BL1": "Bundesliga",
     "FL1": "Ligue 1",
+    "CL":  "Champions League",
+    "EL":  "Europa League",
 }
 
 # The Odds API sport keys
@@ -39,6 +41,8 @@ SPORT_KEYS = [
     "soccer_italy_serie_a",
     "soccer_germany_bundesliga",
     "soccer_france_ligue_one",
+    "soccer_uefa_champs_league",
+    "soccer_uefa_europa_league",
 ]
 
 VALUE_THRESHOLD = 0.05   # Minimum edge to flag as value bet (5%)
@@ -283,19 +287,38 @@ def detect_value_bets(model_probs: dict, best_odds: dict, threshold: float = VAL
 
 # ─── NAME MATCHING ────────────────────────────────────────────────────────────
 
+_STRIP_WORDS = {"fc", "cf", "ac", "sc", "rc", "if", "bk", "sk", "fk", "sv",
+                "club", "de", "del", "la", "el", "los", "the", "united",
+                "city", "town", "athletic", "athletics", "sport", "sporting"}
+
 def normalize(name: str) -> str:
-    """Lowercase, strip accents, remove common suffixes for fuzzy matching."""
     import unicodedata
     name = unicodedata.normalize("NFKD", name)
     name = "".join(c for c in name if not unicodedata.combining(c))
-    return name.lower().strip()
+    name = name.lower().strip()
+    # remove punctuation
+    name = "".join(c if c.isalnum() or c == " " else " " for c in name)
+    # drop common filler words so "Club Atletico de Madrid" == "Atletico Madrid"
+    tokens = [t for t in name.split() if t not in _STRIP_WORDS]
+    return " ".join(tokens)
 
 
 def teams_match(fd_home: str, fd_away: str, odds_home: str, odds_away: str) -> bool:
-    """Return True if both team names roughly match."""
+    """Return True if both team names roughly match after normalisation."""
     def similar(a: str, b: str) -> bool:
         a, b = normalize(a), normalize(b)
-        return a in b or b in a or a[:6] == b[:6]
+        if a == b:
+            return True
+        # substring check
+        if a in b or b in a:
+            return True
+        # token overlap: majority of the shorter name's tokens appear in the longer
+        ta, tb = set(a.split()), set(b.split())
+        shorter = ta if len(ta) <= len(tb) else tb
+        if shorter and len(ta & tb) >= max(1, len(shorter) - 1):
+            return True
+        # prefix fallback
+        return len(a) >= 4 and len(b) >= 4 and a[:5] == b[:5]
 
     return similar(fd_home, odds_home) and similar(fd_away, odds_away)
 
